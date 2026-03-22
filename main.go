@@ -46,19 +46,24 @@ func main() {
 	healthText.Move(fyne.NewPos(680, 10))
 	content.Add(healthText)
 
+	var newGameBtn *widget.Button
+
 	// Floating text helper
 	showFloatingText := func(x, y float32, text string, col color.Color) {
 		ft := canvas.NewText(text, col)
 		ft.TextStyle.Bold = true
 		ft.TextSize = 20
 		ft.Move(fyne.NewPos(x-10, y-30))
-		content.Add(ft)
-		ft.Refresh()
+		fyne.Do(func() { content.Add(ft); ft.Refresh() })
+
 		go func() {
 			for i := 0; i < 20; i++ {
 				time.Sleep(25 * time.Millisecond)
-				ft.Move(fyne.NewPos(x-10, y-30-float32(i)))
-				ft.Refresh()
+				posY := y - 30 - float32(i)
+				fyne.Do(func() {
+					ft.Move(fyne.NewPos(x-10, posY))
+					ft.Refresh()
+				})
 			}
 			fyne.Do(func() { content.Remove(ft) })
 		}()
@@ -69,10 +74,13 @@ func main() {
 		score = 0
 		health = 30
 		gameOver = false
-		scoreText.Text = fmt.Sprintf("Score: %d", score)
-		scoreText.Refresh()
-		healthText.Text = fmt.Sprintf("Health: %d", health)
-		healthText.Refresh()
+		fyne.Do(func() {
+			scoreText.Text = fmt.Sprintf("Score: %d", score)
+			scoreText.Refresh()
+			healthText.Text = fmt.Sprintf("Health: %d", health)
+			healthText.Refresh()
+		})
+		content.Remove(newGameBtn)
 	}
 
 	go func() {
@@ -101,17 +109,16 @@ func main() {
 				btn.Move(fyne.NewPos(x-radius, y-radius))
 				btn.Importance = widget.LowImportance
 
-				stagePoints := []int{3, 2, 1, 0, 0, 0, 0}    // points per stage
-				stageHealth := []int{0, 0, 0, 0, -1, -2, -3} // health per stage
-
 				currentStage := 0
+				stagePoints := []int{3, 2, 1, 0, 0, 0, 0}
+				stageHealth := []int{0, 0, 0, 0, -1, -2, -3}
 
 				btn.OnTapped = func() {
 					if currentStage < len(stagePoints) {
 						points := stagePoints[currentStage]
 						if points > 0 {
 							score += points
-							showFloatingText(x, y, fmt.Sprintf("+%d", points), color.RGBA{R: 212, G: 175, B: 55, A: 255}) // gold
+							showFloatingText(x, y, fmt.Sprintf("+%d", points), color.RGBA{R: 212, G: 175, B: 55, A: 255})
 						}
 					}
 					fyne.Do(func() {
@@ -130,11 +137,13 @@ func main() {
 					content.Refresh()
 				})
 
+				// Circle growth & health penalty
 				go func(c *canvas.Circle, b *widget.Button, px, py, r float32) {
 					stages := []float32{r, r * 1.3, r * 1.6, r * 1.9, r * 2.2, r * 2.5, r * 2.8}
 					for i, s := range stages {
 						time.Sleep(time.Second)
 						currentStage = i
+
 						fyne.Do(func() {
 							c.Resize(fyne.NewSize(s*2, s*2))
 							c.Move(fyne.NewPos(px-s, py-s))
@@ -142,52 +151,43 @@ func main() {
 							b.Move(fyne.NewPos(px-s, py-s))
 							c.Refresh()
 							content.Refresh()
-						})
 
-						// Health penalty stages
-						if i >= 4 && currentStage == i {
-							fyne.Do(func() {
-								if currentStage < len(stagePoints) {
-									hpChange := stageHealth[i]
+							// Health penalty stages
+							if i >= 4 && !gameOver {
+								hpChange := stageHealth[i]
+								if hpChange != 0 {
 									health += hpChange
 									if health < 0 {
 										health = 0
 									}
-									if hpChange < 0 {
-										showFloatingText(px, py, fmt.Sprintf("%d", hpChange), color.RGBA{R: 255, G: 50, B: 50, A: 255}) // red
-									}
+									showFloatingText(px, py, fmt.Sprintf("%d", hpChange), color.RGBA{R: 255, G: 50, B: 50, A: 255})
 									healthText.Text = fmt.Sprintf("Health: %d", health)
 									healthText.Refresh()
-									if health == 0 {
-										gameOver = true
-										// Show game over banner and new game button
-										go func() {
-											fyne.Do(func() {
-												gameOverText := canvas.NewText("GAME OVER", color.White)
-												gameOverText.TextSize = 48
-												gameOverText.TextStyle.Bold = true
-												gameOverText.Move(fyne.NewPos(250, 250))
-												content.Add(gameOverText)
-												content.Refresh()
-
-												newGameBtn := widget.NewButton("New Game", func() {})
-
-												newGameBtn.OnTapped = func() {
-													content.Remove(gameOverText)
-													content.Remove(newGameBtn)
-													startGame()
-												}
-
-												newGameBtn.Resize(fyne.NewSize(200, 50))
-												newGameBtn.Move(fyne.NewPos(300, 320))
-												content.Add(newGameBtn)
-												content.Refresh()
-											})
-										}()
-									}
 								}
-							})
-						}
+
+								if health == 0 && !gameOver {
+									gameOver = true
+
+									// Game over UI
+									gameOverText := canvas.NewText("GAME OVER", color.White)
+									gameOverText.TextSize = 48
+									gameOverText.TextStyle.Bold = true
+									gameOverText.Move(fyne.NewPos(250, 250))
+									content.Add(gameOverText)
+
+									newGameBtn = widget.NewButton("New Game", func() {
+										fyne.Do(func() {
+											content.Remove(gameOverText)
+											startGame()
+										})
+									})
+									newGameBtn.Resize(fyne.NewSize(200, 50))
+									newGameBtn.Move(fyne.NewPos(300, 320))
+									content.Add(newGameBtn)
+									content.Refresh()
+								}
+							}
+						})
 					}
 
 					fyne.Do(func() {
