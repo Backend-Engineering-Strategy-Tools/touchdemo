@@ -1,0 +1,69 @@
+name: Build & Release Go Touch Demo
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'       # trigger releases on version tags
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: 1.22
+
+      - name: Build binary (headless)
+        run: |
+          echo "Building for ${{ matrix.goarch }}"
+          GOOS=linux GOARCH=${{ matrix.goarch }} go build -tags=ci -o touchdemo-${{ matrix.goarch }} main.go
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: touchdemo-${{ matrix.goarch }}
+          path: touchdemo-${{ matrix.goarch }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: touchdemo-amd64
+          path: ./artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          name: touchdemo-arm64
+          path: ./artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          body: Automated build of touch demo
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # <-- required for gh CLI
+        run: |
+          gh release upload ${{ github.ref_name }} ./artifacts/touchdemo-amd64 ./artifacts/touchdemo-arm64
