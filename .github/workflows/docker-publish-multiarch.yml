@@ -49,10 +49,10 @@ jobs:
         with:
           go-version: 1.22
 
-      - name: Build macOS binary (headless)
+      - name: Build macOS binary
         run: |
           echo "Building macOS binary"
-          GOOS=darwin GOARCH=$(uname -m) go build -tags=ci -o touchdemo-${{ github.ref_name }}-mac main.go
+          GOOS=darwin GOARCH=$(uname -m) go build -o touchdemo-${{ github.ref_name }}-mac main.go
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
