@@ -13,6 +13,15 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
+type Circle struct {
+	circle       *canvas.Circle
+	button       *widget.Button
+	x, y, radius float32
+	currentStage int
+	removed      bool
+	stop         chan struct{} // signal to stop growth
+}
+
 func main() {
 	a := app.New()
 	w := a.NewWindow("Touch Game")
@@ -27,14 +36,20 @@ func main() {
 	content.Add(bg)
 
 	// Top banner
-	health := 30
-	score := 0
-	gameOver := false
-
 	banner := canvas.NewRectangle(color.RGBA{R: 50, G: 50, B: 50, A: 255})
 	banner.Resize(fyne.NewSize(800, 50))
 	banner.Move(fyne.NewPos(0, 0))
 	content.Add(banner)
+
+	// Game state
+	var (
+		score       int
+		health      int
+		gameOver    bool
+		newGameBtn  *widget.Button
+		activeCircs []*Circle
+		gameActive  bool // new flag to stop old goroutines
+	)
 
 	scoreText := canvas.NewText(fmt.Sprintf("Score: %d", score), color.White)
 	scoreText.TextSize = 24
@@ -46,13 +61,11 @@ func main() {
 	healthText.Move(fyne.NewPos(680, 10))
 	content.Add(healthText)
 
-	var newGameBtn *widget.Button
-
 	// Floating text helper
 	showFloatingText := func(x, y float32, text string, col color.Color) {
 		ft := canvas.NewText(text, col)
-		ft.TextStyle.Bold = true
 		ft.TextSize = 20
+		ft.TextStyle.Bold = true
 		ft.Move(fyne.NewPos(x-10, y-30))
 		fyne.Do(func() { content.Add(ft); ft.Refresh() })
 
@@ -69,90 +82,133 @@ func main() {
 		}()
 	}
 
-	// New Game function
+	// Start a new game
 	startGame := func() {
-		score = 0
-		health = 30
-		gameOver = false
 		fyne.Do(func() {
+			// Stop old circles
+			gameActive = false
+			for _, c := range activeCircs {
+				if !c.removed {
+					content.Remove(c.circle)
+					content.Remove(c.button)
+					close(c.stop)
+					c.removed = true
+				}
+			}
+			activeCircs = []*Circle{}
+			gameActive = true
+
+			score = 0
+			health = 30
+			gameOver = false
 			scoreText.Text = fmt.Sprintf("Score: %d", score)
 			scoreText.Refresh()
 			healthText.Text = fmt.Sprintf("Health: %d", health)
 			healthText.Refresh()
+
+			if newGameBtn != nil {
+				content.Remove(newGameBtn)
+				newGameBtn = nil
+			}
 		})
-		content.Remove(newGameBtn)
 	}
 
+	// Spawn circles
 	go func() {
+		rand.Seed(time.Now().UnixNano())
 		for range time.Tick(time.Second) {
-			if gameOver {
+			if !gameActive || gameOver {
 				continue
 			}
 
 			num := 1 + rand.Intn(3)
 			for i := 0; i < num; i++ {
+				if !gameActive {
+					break
+				}
+
 				radius := float32(20 + rand.Intn(20))
-				x := float32(rand.Intn(800))
-				y := float32(rand.Intn(600-50) + 50) // avoid top banner
+				x := radius + float32(rand.Intn(800-int(2*radius)))
+				y := 50 + radius + float32(rand.Intn(600-50-int(2*radius)))
 
-				circle := canvas.NewCircle(color.RGBA{
-					R: uint8(50 + rand.Intn(206)),
-					G: uint8(50 + rand.Intn(206)),
-					B: uint8(50 + rand.Intn(206)),
-					A: 255,
-				})
-				circle.Resize(fyne.NewSize(radius*2, radius*2))
-				circle.Move(fyne.NewPos(x-radius, y-radius))
+				c := &Circle{
+					circle: canvas.NewCircle(color.RGBA{
+						R: uint8(50 + rand.Intn(206)),
+						G: uint8(50 + rand.Intn(206)),
+						B: uint8(50 + rand.Intn(206)),
+						A: 255,
+					}),
+					x:      x,
+					y:      y,
+					radius: radius,
+					stop:   make(chan struct{}),
+				}
 
-				btn := widget.NewButton("", nil)
-				btn.Resize(fyne.NewSize(radius*2, radius*2))
-				btn.Move(fyne.NewPos(x-radius, y-radius))
-				btn.Importance = widget.LowImportance
+				c.circle.Resize(fyne.NewSize(radius*2, radius*2))
+				c.circle.Move(fyne.NewPos(x-radius, y-radius))
 
-				currentStage := 0
+				c.button = widget.NewButton("", nil)
+				c.button.Resize(fyne.NewSize(radius*2, radius*2))
+				c.button.Move(fyne.NewPos(x-radius, y-radius))
+				c.button.Importance = widget.LowImportance
+
 				stagePoints := []int{3, 2, 1, 0, 0, 0, 0}
 				stageHealth := []int{0, 0, 0, 0, -1, -2, -3}
 
-				btn.OnTapped = func() {
-					if currentStage < len(stagePoints) {
-						points := stagePoints[currentStage]
-						if points > 0 {
-							score += points
-							showFloatingText(x, y, fmt.Sprintf("+%d", points), color.RGBA{R: 212, G: 175, B: 55, A: 255})
-						}
+				// Handle click
+				c.button.OnTapped = func() {
+					if c.removed {
+						return
+					}
+					points := 0
+					if c.currentStage < len(stagePoints) {
+						points = stagePoints[c.currentStage]
+					}
+					if points > 0 {
+						score += points
+						showFloatingText(c.x, c.y, fmt.Sprintf("+%d", points), color.RGBA{R: 212, G: 175, B: 55, A: 255})
 					}
 					fyne.Do(func() {
-						content.Remove(circle)
-						content.Remove(btn)
+						content.Remove(c.circle)
+						content.Remove(c.button)
 						scoreText.Text = fmt.Sprintf("Score: %d", score)
 						scoreText.Refresh()
 					})
-					currentStage = len(stagePoints)
+					c.removed = true
+					close(c.stop)
 				}
 
+				activeCircs = append(activeCircs, c)
+
 				fyne.Do(func() {
-					content.Add(circle)
-					content.Add(btn)
-					circle.Refresh()
+					content.Add(c.circle)
+					content.Add(c.button)
+					c.circle.Refresh()
 					content.Refresh()
 				})
 
-				// Circle growth & health penalty
-				go func(c *canvas.Circle, b *widget.Button, px, py, r float32) {
-					stages := []float32{r, r * 1.3, r * 1.6, r * 1.9, r * 2.2, r * 2.5, r * 2.8}
+				// Growth goroutine
+				go func(c *Circle) {
+					stages := []float32{c.radius, c.radius * 1.3, c.radius * 1.6, c.radius * 1.9, c.radius * 2.2, c.radius * 2.5, c.radius * 2.8}
 					for i, s := range stages {
-						time.Sleep(time.Second)
-						currentStage = i
+						select {
+						case <-c.stop:
+							return
+						case <-time.After(time.Second):
+						}
 
+						c.currentStage = i
 						fyne.Do(func() {
-							c.Resize(fyne.NewSize(s*2, s*2))
-							c.Move(fyne.NewPos(px-s, py-s))
-							b.Resize(fyne.NewSize(s*2, s*2))
-							b.Move(fyne.NewPos(px-s, py-s))
-							c.Refresh()
-							content.Refresh()
+							if c.removed || !gameActive {
+								return
+							}
+							c.circle.Resize(fyne.NewSize(s*2, s*2))
+							c.circle.Move(fyne.NewPos(c.x-s, c.y-s))
+							c.button.Resize(fyne.NewSize(s*2, s*2))
+							c.button.Move(fyne.NewPos(c.x-s, c.y-s))
+							c.circle.Refresh()
+							c.button.Refresh()
 
-							// Health penalty stages
 							if i >= 4 && !gameOver {
 								hpChange := stageHealth[i]
 								if hpChange != 0 {
@@ -160,15 +216,14 @@ func main() {
 									if health < 0 {
 										health = 0
 									}
-									showFloatingText(px, py, fmt.Sprintf("%d", hpChange), color.RGBA{R: 255, G: 50, B: 50, A: 255})
+									showFloatingText(c.x, c.y, fmt.Sprintf("%d", hpChange), color.RGBA{R: 255, G: 50, B: 50, A: 255})
 									healthText.Text = fmt.Sprintf("Health: %d", health)
 									healthText.Refresh()
 								}
 
 								if health == 0 && !gameOver {
 									gameOver = true
-
-									// Game over UI
+									gameActive = false
 									gameOverText := canvas.NewText("GAME OVER", color.White)
 									gameOverText.TextSize = 48
 									gameOverText.TextStyle.Bold = true
@@ -191,13 +246,17 @@ func main() {
 					}
 
 					fyne.Do(func() {
-						content.Remove(c)
-						content.Remove(b)
+						if !c.removed {
+							content.Remove(c.circle)
+							content.Remove(c.button)
+							c.removed = true
+						}
 					})
-				}(circle, btn, x, y, radius)
+				}(c)
 			}
 		}
 	}()
 
+	startGame()
 	w.ShowAndRun()
 }
