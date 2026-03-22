@@ -45,19 +45,23 @@ jobs:
           if [ "${{ matrix.os }}" = "windows" ]; then
             NAME="$NAME.exe"
           fi
-          echo "Building $NAME"
+          echo "Building $NAME on runner $(uname -m)"
+
+          # CGO is needed for Fyne + GLFW on macOS
           if [ "${{ matrix.os }}" = "darwin" ]; then
-            GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} \
-            go build -ldflags "-X main.version=${{ github.ref_name }}" -o $NAME main.go
+            CGO_ENABLED=1 GOOS=darwin GOARCH=${{ matrix.arch }} \
+              go build -ldflags "-X main.version=${{ github.ref_name }}" -o $NAME main.go
           else
             GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} \
-            go build -tags=ci -ldflags "-X main.version=${{ github.ref_name }}" -o $NAME main.go
+              go build -tags=ci -ldflags "-X main.version=${{ github.ref_name }}" -o $NAME main.go
           fi
 
       - name: Sign macOS binary
         if: matrix.os == 'darwin'
+        shell: bash
         run: |
-          codesign --force --deep --sign - touchdemo-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.arch }}
+          echo "Signing macOS binary $NAME"
+          codesign --force --deep --sign - $NAME
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -75,12 +79,14 @@ jobs:
           path: artifacts
 
       - name: Flatten artifacts
+        shell: bash
         run: |
           mkdir release
           find artifacts -type f -exec cp {} release/ \;
           ls -la release
 
       - name: Generate checksums
+        shell: bash
         run: |
           cd release
           sha256sum * > checksums.txt
