@@ -3,99 +3,93 @@ name: Build & Release Go Touch Demo
 on:
   push:
     tags:
-      - 'v*.*.*'       # trigger releases on version tags
+      - 'v*.*.*'
   workflow_dispatch:
 
 permissions:
   contents: write
-  id-token: write
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        goarch: [amd64, arm64]
+        include:
+          - os: linux
+            arch: amd64
+            runner: ubuntu-latest
+          - os: linux
+            arch: arm64
+            runner: ubuntu-latest
+          - os: darwin
+            arch: amd64
+            runner: macos-13
+          - os: darwin
+            arch: arm64
+            runner: macos-latest
+          - os: windows
+            arch: amd64
+            runner: windows-latest
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: 1.22
-
-      - name: Build Linux binary (headless)
-        run: |
-          echo "Building for Linux ${{ matrix.goarch }}"
-          GOOS=linux GOARCH=${{ matrix.goarch }} go build -tags=ci -o touchdemo-${{ github.ref_name }}-${{ matrix.goarch }} main.go
-
-      - name: Upload Linux artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: touchdemo-${{ github.ref_name }}-${{ matrix.goarch }}
-          path: touchdemo-${{ github.ref_name }}-${{ matrix.goarch }}
-
-  build-macos:
-    runs-on: macos-latest
-    needs: build
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: 1.22
-
-      - name: Build macOS binary
-        run: |
-          echo "Building macOS binary"
-          GOOS=darwin GOARCH=$(uname -m) go build -o touchdemo-${{ github.ref_name }}-mac main.go
-
-      - name: Upload macOS artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: touchdemo-${{ github.ref_name }}-mac
-          path: touchdemo-${{ github.ref_name }}-mac
-
-  release:
-    needs: [build, build-macos]
-    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/setup-go@v4
         with:
-          name: touchdemo-${{ github.ref_name }}-amd64
-          path: ./artifacts
+          go-version: 1.22
+
+      - name: Build binary
+        shell: bash
+        run: |
+          NAME=touchdemo-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.arch }}
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            NAME="$NAME.exe"
+          fi
+          echo "Building $NAME"
+          if [ "${{ matrix.os }}" = "darwin" ]; then
+            GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} \
+            go build -ldflags "-X main.version=${{ github.ref_name }}" -o $NAME main.go
+          else
+            GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} \
+            go build -tags=ci -ldflags "-X main.version=${{ github.ref_name }}" -o $NAME main.go
+          fi
+
+      - name: Sign macOS binary
+        if: matrix.os == 'darwin'
+        run: |
+          codesign --force --deep --sign - touchdemo-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.arch }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.os }}-${{ matrix.arch }}
+          path: touchdemo-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.arch }}*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
       - uses: actions/download-artifact@v4
         with:
-          name: touchdemo-${{ github.ref_name }}-arm64
-          path: ./artifacts
+          path: artifacts
 
-      - name: Download macOS artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: touchdemo-${{ github.ref_name }}-mac
-          path: ./artifacts
+      - name: Flatten artifacts
+        run: |
+          mkdir release
+          find artifacts -type f -exec cp {} release/ \;
+          ls -la release
+
+      - name: Generate checksums
+        run: |
+          cd release
+          sha256sum * > checksums.txt
+          cat checksums.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.ref_name }}
-          name: Release ${{ github.ref_name }}
-          body: Automated build of touch demo
+          files: |
+            release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload release assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload ${{ github.ref_name }} \
-            ./artifacts/touchdemo-${{ github.ref_name }}-amd64 \
-            ./artifacts/touchdemo-${{ github.ref_name }}-arm64 \
-            ./artifacts/touchdemo-${{ github.ref_name }}-mac
