@@ -56,12 +56,12 @@ jobs:
               go build -tags=ci -ldflags "-X main.version=${{ github.ref_name }}" -o $NAME main.go
           fi
 
-      - name: Sign macOS binary
-        if: matrix.os == 'darwin'
-        shell: bash
-        run: |
-          echo "Signing macOS binary $NAME"
-          codesign --force --deep --sign - $NAME
+#      - name: Sign macOS binary
+#        if: matrix.os == 'darwin'
+#        shell: bash
+#        run: |
+#          echo "Signing macOS binary $NAME"
+#          codesign --force --deep --sign - $NAME
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
